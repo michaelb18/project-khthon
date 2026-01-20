@@ -1,0 +1,17 @@
+EO_data/**
+**/.ipynb_checkpoints/**
+khthon/**
+fmow/outputs*
+fmow/fmow-sentinel/**
+# Ignore all CSV files anywhere in the repository
+**/*.csv
+
+# Ignore all TAR files (including compressed .tar.gz or .tar.xz) anywhere in the repository
+**/*.tar
+**/*.tar.gz
+**/*.tar.xz
+
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
