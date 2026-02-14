@@ -420,6 +420,9 @@ def get_default_transform(mode: str = 'train', normalize: bool = True, image_siz
     transform_list = []
     
     # Resize all images to the same size for batching
+    #transform_list.append(transforms.ToTensor())
+    transform_list.append(transforms.Lambda(lambda x: x * 0.0001))
+    transform_list.append(transforms.Lambda(lambda x: torch.nan_to_num(x, 0.0)))
     transform_list.append(ResizeMultiBand(size=image_size))
     transform_list.append(transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]))
     

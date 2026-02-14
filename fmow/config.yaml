@@ -2,7 +2,7 @@
 
 # Dataset paths
 root_dir: /home/michael/project_khthon/fmow
-output_dir: ./outputs_infilling
+output_dir: ./test
 
 # Training parameters
 batch_size: 8
@@ -19,26 +19,26 @@ image_size: 224     # Target image size for resizing
 
 # Category filtering
 # Set to null to use all categories, or provide a list of category names
-categories:
-    - airport
-    - border_checkpoint
-    - burial_site
-    - debris_or_rubble
-    - educational_institution
-    - hospital
-    - impoverished_settlement
-    - military_facility
-    - multi-unit_residential
-    - park
-    - place_of_worship
-    - port
-    - prison
-    - single-unit_residential
-    - crop_field
-    - aquaculture
-    - wind_farm
-    - barn
-    - solar_farm
+categories: null
+#    - airport
+#    - border_checkpoint
+#    - burial_site
+#    - debris_or_rubble
+#    - educational_institution
+#    - hospital
+#    - impoverished_settlement
+#    - military_facility
+#    - multi-unit_residential
+#    - park
+#    - place_of_worship
+#    - port
+#    - prison
+#    - single-unit_residential
+#    - crop_field
+#    - aquaculture
+#    - wind_farm
+#    - barn
+#    - solar_farm
 # Example with specific categories:
 # categories:
 #   - airport
