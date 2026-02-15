@@ -12,6 +12,27 @@ from scipy import ndimage
 from scipy.interpolate import griddata
 import time
 
+class PercentScaler(object):
+    def __init__(self, low=2, high=98):
+        self.low = low
+        self.high = high
+
+    def __call__(self, img):
+        if isinstance(img, torch.Tensor):
+            img_np = img.numpy()
+        else:
+            img_np = img
+
+        min_val, max_val = np.percentile(img_np, (self.low, self.high))
+
+        scaled_band = np.clip(img_np, min_val, max_val)
+
+        if max_val - min_val == 0:
+            return torch.from_numpy(scaled_band).float()
+
+        normalized = (scaled_band - min_val) / (max_val - min_val)
+
+        return torch.from_numpy(normalized).float()
 
 class ResizeMultiBand:
     """
@@ -423,6 +444,7 @@ def get_default_transform(mode: str = 'train', normalize: bool = True, image_siz
     #transform_list.append(transforms.ToTensor())
     transform_list.append(transforms.Lambda(lambda x: x * 0.0001))
     transform_list.append(transforms.Lambda(lambda x: torch.nan_to_num(x, 0.0)))
+    transform_list.append(PercentScaler(low = 2, high = 98)),
     transform_list.append(ResizeMultiBand(size=image_size))
     transform_list.append(transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]))
     

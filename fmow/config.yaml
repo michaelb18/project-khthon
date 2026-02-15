@@ -2,7 +2,7 @@
 
 # Dataset paths
 root_dir: /home/michael/project_khthon/fmow
-output_dir: ./test
+output_dir: ./large_objects
 
 # Training parameters
 batch_size: 8
@@ -19,7 +19,27 @@ image_size: 224     # Target image size for resizing
 
 # Category filtering
 # Set to null to use all categories, or provide a list of category names
-categories: null
+categories:
+    - airport
+    - airport_terminal
+    - amusement_park
+    - aquaculture
+    - crop_field
+    - dam
+    - golf_course
+    - impoverished_settlement
+    - interchange
+    - lighthouse
+    - nuclear_powerplant
+    - port
+    - railway_bridge
+    - road_bridge
+    - runway
+    - solar_farm
+    - space_facility
+    - stadium
+    - tunnel_opening
+    - wind_farm
 #    - airport
 #    - border_checkpoint
 #    - burial_site

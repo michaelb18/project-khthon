@@ -2,6 +2,7 @@ EO_data/**
 **/.ipynb_checkpoints/**
 khthon/**
 fmow/outputs*
+fmow/large_object*
 fmow/fmow-sentinel/**
 # Ignore all CSV files anywhere in the repository
 **/*.csv
