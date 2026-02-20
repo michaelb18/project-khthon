@@ -368,6 +368,7 @@ class FMoWSentinelDataset(Dataset):
             all_bands[2, :, :],  # B03 - Green
             all_bands[1, :, :]   # B02 - Blue
         ], axis=0)  # Shape: (3, H, W)
+
         extract_time = time.time() - extract_start
         
         # Infill null pixels if enabled (on RGB image)

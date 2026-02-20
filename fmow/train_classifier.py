@@ -32,6 +32,7 @@ from sklearn.metrics import (
     confusion_matrix, classification_report, ConfusionMatrixDisplay
 )
 from sklearn.preprocessing import label_binarize
+from sklearn.cluster import KMeans
 
 from dataloader import FMoWSentinelDataset, create_dataloader
 
@@ -495,6 +496,49 @@ def load_config(config_path: str) -> Dict:
         config = yaml.safe_load(f)
     return config
 
+def compute_anchors(dataloader, n_anchors=8):
+    """
+    Use KMeans to find canonical bounding boxes for
+    each class in dataloader.
+
+    Args:
+        dataloader: A pytorch dataloader containing a training set
+        n_anchors: the number of anchors per class
+
+    Returns:
+        dict: A dictionary where keys are class names and values are
+              np.ndarrays containing anchor bounding box sizes.
+    """
+
+    from copy import deepcopy
+    # Store transform so we can process images without resizing for now but put it back in later
+    transform = deepcopy(dataloader.dataset.transform)
+
+    dataloader.dataset.transform = None
+    classes = {cl: [] for cl in dataloader.dataset.categories}
+
+    # Iterate through the raw dataset to collect image dimensions for each class
+    for idx in tqdm(range(len(dataloader.dataset)), desc="Collecting image dimensions"):
+        image, label = dataloader.dataset[idx]
+        image = image.numpy()
+        label = label.item()
+        # Append height and width
+        classes[dataloader.dataset.get_category_name(label)].append([image.shape[1], image.shape[2]])
+
+    anchors = {}
+    # Perform K-Means clustering on the collected dimensions to find representative anchor boxes
+    for cl, sizes in classes.items():
+        kmeans = KMeans(n_clusters=n_anchors, random_state=42)
+        sizes = np.array(sizes)
+
+        if sizes.size > 0:
+            kmeans.fit(sizes)
+            anchors[cl] = kmeans.cluster_centers_
+        else:
+            raise ValueError(f'Class {cl} is missing from the dataset')
+
+    dataloader.dataset.transform = transform
+    return anchors
 
 def main():
     import sys
@@ -509,9 +553,6 @@ def main():
     # Check if config file exists
     if not os.path.exists(config_path):
         print(f"Config file not found: {config_path}")
-        print("Creating default config.yaml file...")
-        create_default_config('config.yaml')
-        print("Please edit config.yaml and run again.")
         return
     
     # Load configuration
