@@ -71,7 +71,7 @@ def get_image(center_lat, center_lon, height, width, days = 90):
         max_cloud_cover=50
     )
 
-    sentinel2_cube = sentinel2_cube.process("mask_scl_dilation", data=sentinel2_cube, scl_band_name="SCL")
+    #sentinel2_cube = sentinel2_cube.process("mask_scl_dilation", data=sentinel2_cube, scl_band_name="SCL")
     median_image = sentinel2_cube.reduce_dimension(dimension="t", reducer="median")
 
     from openeo.processes import ProcessBuilder
