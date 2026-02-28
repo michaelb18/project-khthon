@@ -19,6 +19,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torchvision.models as models
+from torch.distributions.normal import Normal
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import matplotlib
@@ -34,8 +36,71 @@ from sklearn.metrics import (
 from sklearn.preprocessing import label_binarize
 from sklearn.cluster import KMeans
 
+import torch.nn as nn
 from dataloader import FMoWSentinelDataset, create_dataloader
 
+class Sampling(nn.Module):
+    def forward(self, z_mean, z_log_var):
+        # get the shape of the tensor for the mean and log variance
+        batch, dim = z_mean.shape
+        # generate a normal random tensor (epsilon) with the same shape as z_mean
+        # this tensor will be used for reparameterization trick
+        epsilon = Normal(0, 1).sample((batch, dim)).to(z_mean.device)
+        # apply the reparameterization trick to generate the samples in the
+        # latent space
+        return z_mean + torch.exp(0.5 * z_log_var) * epsilon
+
+class ResNetClassifier(nn.Module):
+    def __init__(self, num_classes):
+        super(ResNetClassifier, self).__init__()
+        self.model = models.resnet152(weights = models.ResNet152_Weights.IMAGENET1K_V2)
+        self.model.fc = nn.Linear(self.model.fc.in_features, self.model.fc.in_features)
+        self.mean = nn.Linear(self.model.fc.in_features, self.model.fc.in_features)
+        self.var = nn.Linear(self.model.fc.in_features, self.model.fc.in_features)
+        self.cls = nn.Linear(self.model.fc.in_features, num_classes)
+        self.sample = Sampling()
+
+    def forward(self, x):
+        representations = self.model(x)
+        z_mean = self.mean(representations)
+        z_log_var = self.var(representations)
+        z = self.sample(z_mean, z_log_var)
+        x = self.cls(z)
+
+        return z_mean, z_log_var, x
+    
+    @torch.no_grad()
+    def predict(self, x, n_samples=100):
+        # 1. Base representations from ResNet
+        reps = self.model(x) 
+        batch_size = x.size(0)
+        
+        # 2. Expand representations to simulate n_samples in parallel
+        # Shape: [n_samples * batch, features]
+        reps_expanded = reps.repeat(n_samples, 1)
+
+        # 3. Stochastic Forward Pass
+        z_mean = self.mean(reps_expanded)
+        z_log_var = self.var(reps_expanded)
+        z = self.sample(z_mean, z_log_var)
+        logits = self.cls(z) # [n_samples * batch, num_classes]
+
+        # 4. Reshape and get predictions per sample
+        # Shape: [n_samples, batch, num_classes]
+        logits = logits.view(n_samples, batch_size, -1)
+        sample_preds = torch.argmax(logits, dim=-1) # [n_samples, batch]
+
+        # 5. Calculate the frequency "Buffer" for every class
+        # We use one_hot to turn indices into a countable grid
+        # Shape: [n_samples, batch, num_classes]
+        one_hot_preds = torch.nn.functional.one_hot(sample_preds, num_classes=self.cls.out_features)
+        
+        # Sum across the sample dimension and convert to percentage
+        # Shape: [batch, num_classes]
+        class_counts = one_hot_preds.sum(dim=0).float()
+        class_probs_buffer = (class_counts / n_samples)
+
+        return class_probs_buffer
 
 def get_foundation_model(num_classes: int, model_name: str = 'Sentinel2_SwinT_SI_MS', pretrained: bool = True, in_channels: int = 3):
     """
@@ -51,25 +116,12 @@ def get_foundation_model(num_classes: int, model_name: str = 'Sentinel2_SwinT_SI
     Returns:
         PyTorch model
     """
-    # Try to import satlaspretrain_models
-    #import satlaspretrain_models
-
-    #weights_manager = satlaspretrain_models.Weights()
-    
-    # Use Satlas foundation model with correct API
-    #print(f"Loading satlaspretrain_models: {model_name}")
-    #model = weights_manager.get_pretrained_model(
-    #    model_name,
-    #    fpn=True,
-    #    head=satlaspretrain_models.Head.CLASSIFY,
-    #    num_categories=num_classes
-    #)
-    #print(f"Successfully loaded {model_name} from satlaspretrain_models")
     import torch
     import torchvision.models as models
-    model = models.resnet152(weights = models.ResNet152_Weights.IMAGENET1K_V2)
-    model.fc = nn.Linear(model.fc.in_features, num_classes)
-    model.to('cuda')
+    #model = models.resnet152(weights = models.ResNet152_Weights.IMAGENET1K_V2)
+    #model.fc = nn.Linear(model.fc.in_features, num_classes)
+    #model.to('cuda')
+    model = ResNetClassifier(num_classes)
     return model
 
 
@@ -192,6 +244,8 @@ class MetricsTracker:
         plt.savefig(output_dir / 'all_metrics_curves.png', dpi=300, bbox_inches='tight')
         plt.close()
 
+def kld(mu, logvar):
+    return (-0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim = 1)).mean()
 
 def train_epoch(model, dataloader, criterion, optimizer, device):
     """Train for one epoch."""
@@ -235,13 +289,13 @@ def train_epoch(model, dataloader, criterion, optimizer, device):
 
         # Forward pass
         forward_start = time.time()
-        outputs = model(images)
+        mean, var, outputs = model(images)
         forward_time = time.time() - forward_start
         forward_times.append(forward_time)
 
         # Loss calculation
         loss_start = time.time()
-        loss = criterion(outputs, labels)
+        loss = criterion(outputs, labels) + 0.1 * kld(mean, var)
         loss_time = time.time() - loss_start
         loss_times.append(loss_time)
 
@@ -333,8 +387,8 @@ def validate(model, dataloader, criterion, device):
             images = images.to(device)
             labels = labels.to(device)
             
-            outputs = model(images)
-            loss = criterion(outputs, labels)
+            mean, var, outputs = model(images)
+            loss = criterion(outputs, labels) + 0.1 * kld(mean, var)
             
             running_loss += loss.item() * images.size(0)
             

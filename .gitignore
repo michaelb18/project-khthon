@@ -3,6 +3,7 @@ EO_data/**
 khthon/**
 fmow/outputs*
 fmow/large_object*
+fmow/bnn_all*
 fmow/fmow-sentinel/**
 # Ignore all CSV files anywhere in the repository
 **/*.csv
