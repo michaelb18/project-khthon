@@ -67,7 +67,7 @@ def get_image(center_lat, center_lon, height, width, days = 90):
         "SENTINEL2_L2A", #collection chosen
         spatial_extent=spatial_extent,
         temporal_extent=temporal_extent,
-        bands=["B02", "B03", "B04","B08","B8A", "B11", "B12", "SCL"],
+        bands=['B01', 'B02', 'B03', 'B04', 'B05', 'B06', 'B07', 'B08', 'B8A', 'B09', 'SCL', 'B11', 'B12'],
         max_cloud_cover=50
     )
 
@@ -81,15 +81,15 @@ def get_image(center_lat, center_lon, height, width, days = 90):
         return x * 0.0001
 
     # Convert to reflectance (simple multiplication)
-    print("Converting to reflectance...")
-    reflectance_cube= median_image.apply(scale_function)
+    #print("Converting to reflectance...")
+    #reflectance_cube= median_image.apply(scale_function)
 
     #def scale_function(x: ProcessBuilder):
     #    return x.linear_scale_range(0, 1, 0, 255)
 
     # apply scale_function to all pixels
     #visual_image= reflectance_cube.apply(scale_function)
-    final_result = reflectance_cube.save_result(format="GTiff")
+    final_result = median_image.save_result(format="GTiff")
  
     job_title = "Field_Observation"
 

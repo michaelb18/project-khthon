@@ -1,4 +1,5 @@
 import os
+from tkinter import N
 import pandas as pd
 import numpy as np
 import torch
@@ -33,6 +34,59 @@ class PercentScaler(object):
         normalized = (scaled_band - min_val) / (max_val - min_val)
 
         return torch.from_numpy(normalized).float()
+
+
+class AppendSentinel2Indices:
+    """
+    Compute Sentinel-2 spectral indices and append as extra channels.
+    Formulas from: https://clearsky.vision/knowledge/sentinel2-indices-cheatsheet
+    
+    Expects input shape (12, H, W) with band order: B1, B2, B3, B4, B5, B6, B7, B8A, B8B, B9, B11, B12.
+    B8A (channel 7) is used where formulas reference B8 (NIR).
+    Output shape: (18, H, W) = 12 bands + 6 indices [NBR, NFDI, IBI, MSI, RECI, NDVI].
+    """
+    def __init__(self, eps: float = 1e-6):
+        self.eps = eps
+
+    def __call__(self, img: torch.Tensor) -> torch.Tensor:
+        # Channels: 0=B1, 1=B2, 2=B3, 3=B4, 4=B5, 5=B6, 6=B7, 7=B8A, 8=B8B, 9=B9, 10=B11, 11=B12
+        b2, b3, b4, b5 = img[1], img[2], img[3], img[4]
+        b8a, b11, b12 = img[7], img[10], img[11]
+        eps = self.eps
+
+        # NDVI = (B8 - B4) / (B8 + B4)
+        ndvi = (b8a - b4) / (b8a + b4 + eps)
+
+        # NBR (Normalized Burn Ratio) = (B8 - B12) / (B8 + B12)
+        nbr = (b8a - b12) / (b8a + b12 + eps)
+
+        # NFDI = (B3 - B11) / (B3 + B11)  (Green-SWIR, same as MNDWI/NDSI formula)
+        nfdi = (b3 - b11) / (b3 + b11 + eps)
+
+        # NDBI = (B11 - B8) / (B11 + B8) for IBI
+        ndbi = (b11 - b8a) / (b11 + b8a + eps)
+        # IBI (Index-Based Built-up) = (NDBI - NDVI) / (NDBI + NDVI)
+        ibi = (ndbi - ndvi) / (ndbi + ndvi + eps)
+
+        # MSI (Moisture Stress Index) = B11 / B8
+        msi = b11 / (b8a + eps)
+
+        # RECI (Red Edge Chlorophyll Index) = (B8 - B4) / (B5 - B4)
+        reci = (b8a - b4) / (b5 - b4 + eps)
+
+        # Clamp indices to reasonable range to avoid extreme values from noise
+        def clamp_idx(x):
+            return torch.clamp(x, -2.0, 2.0)
+        ndvi = clamp_idx(ndvi)
+        nbr = clamp_idx(nbr)
+        nfdi = clamp_idx(nfdi)
+        ibi = clamp_idx(ibi)
+        msi = torch.clamp(msi, 0.0, 10.0)
+        reci = clamp_idx(reci)
+
+        indices = torch.stack([nbr, nfdi, ibi, msi, reci, ndvi], dim=0)
+        return torch.cat([img, indices], dim=0)  # (18, H, W)
+
 
 class ResizeMultiBand:
     """
@@ -73,12 +127,9 @@ class FMoWSentinelDataset(Dataset):
     """
     PyTorch Dataset for fMoW-Sentinel dataset.
     
-    Outputs RGB images extracted from Sentinel-2 bands:
-    - Red (R) = B04 (band index 3)
-    - Green (G) = B03 (band index 2)
-    - Blue (B) = B02 (band index 1)
-    
-    Original Sentinel-2 bands are in order: B1, B2, B3, B4, B5, B6, B7, B8A, B8B, B9, B10, B11, B12.
+    Outputs 12 Sentinel-2 bands (excluding B10 cirrus):
+    B1, B2, B3, B4, B5, B6, B7, B8A, B8B, B9, B11, B12
+    Original order: B1, B2, B3, B4, B5, B6, B7, B8A, B8B, B9, B10, B11, B12 (indices 0-12)
     """
     
     def __init__(
@@ -358,16 +409,12 @@ class FMoWSentinelDataset(Dataset):
             raise RuntimeError(f"Error loading image {image_path}: {e}")
         load_time = time.time() - load_start
         
-        # Extract RGB bands: B04 (Red), B03 (Green), B02 (Blue)
-        # Bands are in order: B1, B2, B3, B4, B5, B6, B7, B8A, B8B, B9, B10, B11, B12
-        # So indices are: B02=1, B03=2, B04=3
-        # RGB order: R=B04, G=B03, B=B02
+        # Extract 12 Sentinel-2 bands (excluding B10 cirrus)
+        # Bands: B1, B2, B3, B4, B5, B6, B7, B8A, B8B, B9, B11, B12
+        # Original indices: B1=0, B2=1, B3=2, B4=3, B5=4, B6=5, B7=6, B8A=7, B8B=8, B9=9, B10=10, B11=11, B12=12
         extract_start = time.time()
-        image = np.stack([
-            all_bands[3, :, :],  # B04 - Red
-            all_bands[2, :, :],  # B03 - Green
-            all_bands[1, :, :]   # B02 - Blue
-        ], axis=0)  # Shape: (3, H, W)
+        band_indices = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12]  # Exclude B10 (index 10)
+        image = np.stack([all_bands[i, :, :] for i in band_indices], axis=0)  # Shape: (12, H, W)
 
         extract_time = time.time() - extract_start
         
@@ -378,7 +425,7 @@ class FMoWSentinelDataset(Dataset):
             image = self._infill_null_pixels(image)
             infill_time = time.time() - infill_start
         
-        # Convert to torch tensor: (3, H, W)
+        # Convert to torch tensor: (12, H, W)
         tensor_start = time.time()
         image = torch.from_numpy(image)
         tensor_time = time.time() - tensor_start
@@ -445,9 +492,12 @@ def get_default_transform(mode: str = 'train', normalize: bool = True, image_siz
     #transform_list.append(transforms.ToTensor())
     transform_list.append(transforms.Lambda(lambda x: x * 0.0001))
     transform_list.append(transforms.Lambda(lambda x: torch.nan_to_num(x, 0.0)))
-    transform_list.append(PercentScaler(low = 2, high = 98)),
+    # Append 6 spectral indices: NBR, NFDI, IBI, MSI, RECI, NDVI -> 18 channels total
+    transform_list.append(AppendSentinel2Indices(eps=1e-6))
     transform_list.append(ResizeMultiBand(size=image_size))
-    transform_list.append(transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]))
+    #transform_list.append(PercentScaler())
+    # 18 channels: 12 bands + 6 indices
+    #transform_list.append(transforms.Normalize(mean=[0.5] * 18, std=[0.5] * 18))
     
     return transforms.Compose(transform_list) if transform_list else None
 

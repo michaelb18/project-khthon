@@ -2,13 +2,13 @@
 
 # Dataset paths
 root_dir: /home/michael/project_khthon/fmow
-output_dir: ./bnn_all
+output_dir: ./full
 
 # Training parameters
 batch_size: 8
 epochs: 10
 lr: 0.0001
-num_workers: 1
+num_workers: 4
 
 # Model configuration
 model_name: Sentinel2_SwinT_SI_RGB  # Foundation model name from satlaspretrain_models
@@ -69,5 +69,5 @@ categories: null
 
 # Sample limiting
 # Set to null to use all samples, or provide a number to limit samples per category
-max_samples_per_category: 500  # Example: 100 to limit each category to 100 samples
+max_samples_per_category: null  # Example: 100 to limit each category to 100 samples
 

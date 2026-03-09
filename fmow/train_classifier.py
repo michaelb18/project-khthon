@@ -11,6 +11,7 @@ This script:
 
 import os
 import json
+from PIL import Image
 import yaml
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -51,25 +52,33 @@ class Sampling(nn.Module):
         return z_mean + torch.exp(0.5 * z_log_var) * epsilon
 
 class ResNetClassifier(nn.Module):
-    def __init__(self, num_classes):
+    def __init__(self, num_classes, in_channels=18):
         super(ResNetClassifier, self).__init__()
-        self.model = models.resnet152(weights = models.ResNet152_Weights.IMAGENET1K_V2)
-        self.model.fc = nn.Linear(self.model.fc.in_features, self.model.fc.in_features)
-        self.mean = nn.Linear(self.model.fc.in_features, self.model.fc.in_features)
-        self.var = nn.Linear(self.model.fc.in_features, self.model.fc.in_features)
-        self.cls = nn.Linear(self.model.fc.in_features, num_classes)
-        self.sample = Sampling()
+        self.model = models.resnet152(weights=models.ResNet152_Weights.IMAGENET1K_V1)
+        # Replace first conv to accept 18 channels (12 Sentinel-2 bands + 6 indices)
+        self.model.conv1 = nn.Conv2d(in_channels, 64, kernel_size=7, stride=2, padding=3, bias=False)
+        #self.mean = nn.Linear(self.model.fc.in_features, self.model.fc.in_features)
+        #self.var = nn.Linear(self.model.fc.in_features, self.model.fc.in_features)
+        #nn.init.constant_(self.var.weight, 0)
+        #nn.init.constant_(self.var.bias, 0)
+        #self.cls = nn.Linear(self.model.fc.in_features, num_classes)
+        #self.sample = Sampling()
+        self.model.fc = nn.Linear(self.model.fc.in_features, num_classes)
 
     def forward(self, x):
-        representations = self.model(x)
-        z_mean = self.mean(representations)
-        z_log_var = self.var(representations)
-        z = self.sample(z_mean, z_log_var)
-        x = self.cls(z)
+        #representations = self.model(x)
+        #z_mean = self.mean(representations)
+        #z_log_var =torch.clamp(self.var(representations), min = -10, max = 10.0)
+        #z = self.sample(z_mean, z_log_var)
+        #x = self.cls(z)
 
-        return z_mean, z_log_var, x
-    
+        #return z_mean, z_log_var, x
+        return self.model(x)
+
     @torch.no_grad()
+    def predict(self, x, n_samples = 100):
+        return self(x).softmax(-1)
+    """@torch.no_grad()
     def predict(self, x, n_samples=100):
         # 1. Base representations from ResNet
         reps = self.model(x) 
@@ -101,8 +110,8 @@ class ResNetClassifier(nn.Module):
         class_probs_buffer = (class_counts / n_samples)
 
         return class_probs_buffer
-
-def get_foundation_model(num_classes: int, model_name: str = 'Sentinel2_SwinT_SI_MS', pretrained: bool = True, in_channels: int = 3):
+    """
+def get_foundation_model(num_classes: int, model_name: str = 'Sentinel2_SwinT_SI_MS', pretrained: bool = False, in_channels: int = 18):
     """
     Get foundation model from satlaspretrain_models or fallback to timm.
     
@@ -111,17 +120,14 @@ def get_foundation_model(num_classes: int, model_name: str = 'Sentinel2_SwinT_SI
         model_name: Model name for satlaspretrain_models (e.g., 'Sentinel2_SwinT_SI_MS')
                    or timm model name for fallback
         pretrained: Whether to use pretrained weights
-        in_channels: Number of input channels (13 for Sentinel-2)
+        in_channels: Number of input channels (18 = 12 bands + 6 indices)
     
     Returns:
         PyTorch model
     """
     import torch
     import torchvision.models as models
-    #model = models.resnet152(weights = models.ResNet152_Weights.IMAGENET1K_V2)
-    #model.fc = nn.Linear(model.fc.in_features, num_classes)
-    #model.to('cuda')
-    model = ResNetClassifier(num_classes)
+    model = ResNetClassifier(num_classes, in_channels=in_channels)
     return model
 
 
@@ -283,19 +289,22 @@ def train_epoch(model, dataloader, criterion, optimizer, device):
         labels = labels.to(device)
         transfer_time = time.time() - transfer_start
         transfer_times.append(transfer_time)
+        
+        assert not torch.isnan(images).any()
 
         # Zero gradients
         optimizer.zero_grad()
 
         # Forward pass
         forward_start = time.time()
-        mean, var, outputs = model(images)
+        #mean, var, outputs = model(images)
+        outputs = model(images)
         forward_time = time.time() - forward_start
         forward_times.append(forward_time)
 
         # Loss calculation
         loss_start = time.time()
-        loss = criterion(outputs, labels) + 0.1 * kld(mean, var)
+        loss = criterion(outputs, labels)# + 1e-4 * kld(mean, var)
         loss_time = time.time() - loss_start
         loss_times.append(loss_time)
 
@@ -386,9 +395,14 @@ def validate(model, dataloader, criterion, device):
             
             images = images.to(device)
             labels = labels.to(device)
+
+            assert not torch.isnan(images).any()
             
-            mean, var, outputs = model(images)
-            loss = criterion(outputs, labels) + 0.1 * kld(mean, var)
+            #mean, var, outputs = model(images)
+            outputs = model(images)
+            if criterion(outputs, labels) > 10000:
+                print(outputs, labels, criterion(outputs, labels))
+            loss = criterion(outputs, labels)
             
             running_loss += loss.item() * images.size(0)
             
@@ -514,7 +528,7 @@ def plot_pr_curves(y_true, y_probs, class_names, output_path: Path):
     plt.figure(figsize=(10, 8))
     
     # Plot each class
-    for i in range(min(n_classes, 20)):  # Limit to 20 classes for readability
+    for i in range(min(n_classes, 62)):  # Limit to 62 classes for readability
         plt.plot(recall[i], precision[i], lw=2, alpha=0.7,
                 label=f'{class_names[i]} (AP = {pr_auc[i]:.3f})')
     
@@ -683,9 +697,9 @@ def main():
     
     # Create model
     print(f"Creating model: {args.model_name}")
-    # Images are RGB (3 channels: B04, B03, B02)
-    model = get_foundation_model(num_classes, model_name=args.model_name, 
-                                 pretrained=True, in_channels=3)
+    # 18 channels: 12 Sentinel-2 bands + 6 indices (NBR, NFDI, IBI, MSI, RECI, NDVI)
+    model = get_foundation_model(num_classes, model_name=args.model_name,
+                                 pretrained=True, in_channels=18)
     model = model.to(device)
     
     # Loss and optimizer

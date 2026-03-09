@@ -6,9 +6,10 @@ import sys
 sys.path.append('/home/michael/project_khthon')
 from get_data_from_eo import *
 import torchvision
+import numpy as np
 
 def get_rgb_image(image):
-    img = image.sel(band=[3, 2, 1])
+    img = image.sel(band=[3, 2, 1]) * 0.0001
     b04 = img[0, :, :]  # Red band
     b03 = img[1, :, :]  # Green band
     b02 = img[2, :, :]  # Blue band
@@ -16,6 +17,12 @@ def get_rgb_image(image):
     # Stack into RGB image
     rgb_image = (np.stack([b04, b03, b02], axis=-1) * 255).astype(np.uint8)
     return rgb_image
+
+def get_bands(image):
+    all_bands = np.array(image)
+    band_indices = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12]  # Exclude B10 (index 10)
+    image = np.stack([all_bands[i, :, :] for i in band_indices], axis=0)  # Shape: (12, H, W)
+    return image
 
 def get_bboxes(image):
     from rasterio.transform import rowcol
@@ -98,6 +105,7 @@ def inference_rcnn(model, image, iou_thresh = 0.5, confidence_threshold = 0.95, 
     from copy import deepcopy
     rgb_image = deepcopy(get_rgb_image(image))
     image_w_text = deepcopy(rgb_image)
+    inference_image = get_bands(image)
     min_val, max_val = np.percentile(image_w_text, (2, 98)) # Optional: Use percentiles
     scaled_band = np.clip(image_w_text, min_val, max_val)
     image_w_text = (scaled_band - min_val) / (max_val - min_val)
@@ -110,10 +118,10 @@ def inference_rcnn(model, image, iou_thresh = 0.5, confidence_threshold = 0.95, 
         y1 = y
         x2 = x + w
         y2 = y + h
-        img = np.stack([rgb_image[y1:y2, x1:x2, 0], rgb_image[y1:y2, x1:x2, 1], rgb_image[y1:y2, x1:x2, 2]], axis=0)
-        img = torch.from_numpy(img)
+        #img = np.stack([rgb_image[y1:y2, x1:x2, 0], rgb_image[y1:y2, x1:x2, 1], rgb_image[y1:y2, x1:x2, 2]], axis=0)
+        img = torch.from_numpy(inference_image)
         t = torch.unsqueeze(transform(img).to("cuda"), dim = 0)
-        softmaxes = torch.nn.functional.softmax(model(t)).cpu().numpy()[0, ...]
+        softmaxes = model.predict(t).cpu().numpy()[0, ...]
         result = categories[np.argmax(softmaxes)]
         pseudoconfidence = softmaxes[np.argmax(softmaxes)]
         if pseudoconfidence > confidence_threshold:
@@ -162,14 +170,22 @@ def inference_location(lat, lon, model):
 def inference_img(image, model, **kwargs):
     return inference_rcnn(model, image, **kwargs)
 
-def get_model():
-    model = get_foundation_model(20, model_name="resnet152", pretrained = True, in_channels = 3)
-    model.load_state_dict(torch.load('/home/michael/project_khthon/fmow/large_objects/best_model.pth'))
+def get_model(num_classes = 62):
+    #model = get_foundation_model(20, model_name="resnet152", pretrained = True, in_channels = 3)
+    #model.eval()
+    #return model
+    import torch
+    import torchvision.models as models
+    #model = models.resnet152(weights = models.ResNet152_Weights.IMAGENET1K_V2)
+    #model.fc = nn.Linear(model.fc.in_features, num_classes)
+    model = ResNetClassifier(num_classes)
+    model.load_state_dict(torch.load('/home/michael/project_khthon/fmow/twelve_channel/best_model.pth'))
+    model.to('cuda')
     model.eval()
     return model
 
 def get_categories():
-    train_loader = create_dataloader(
+    """train_loader = create_dataloader(
             root_dir="/home/michael/project_khthon/fmow",
             split='train',
             batch_size=1,
@@ -197,6 +213,18 @@ def get_categories():
                         'stadium',
                         'tunnel_opening',
                         'wind_farm'],
+            max_samples_per_category=1
+        )
+
+    return train_loader.dataset.categories"""
+    train_loader = create_dataloader(
+            root_dir="/home/michael/project_khthon/fmow",
+            split='train',
+            batch_size=1,
+            shuffle=True,
+            num_workers=1,
+            infill_nulls=False,
+            image_size=224,
             max_samples_per_category=1
         )
 
