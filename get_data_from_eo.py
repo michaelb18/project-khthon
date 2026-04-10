@@ -52,14 +52,19 @@ def ll2px(rds, lat_list, lon_list):
     # Convert to standard numpy integers for plotting
     return np.array(cols), np.array(rows)
 
-def get_image(center_lat, center_lon, height, width, days = 90):
-
+def get_image(center_lat, center_lon, height, width, days = 30, time = None):
+    
+    if time is None:
+        time = datetime.now().date()
     lon_min, lat_min, lon_max, lat_max = meters2latlon(center_lat, center_lon, height, width)
 
-    today_date = datetime.now().date()
-
-    month_3_data = today_date -timedelta(days=(days))
-    temporal_extent = [str(month_3_data),str(today_date)]
+    start = time-timedelta(days=(days))
+    end = time+timedelta(days=(days))
+    if end > datetime.now().date():
+        end = datetime.now().date()
+        start = datetime.now().date() - timedelta(days=(days))
+        
+    temporal_extent = [str(start),str(end)]
     spatial_extent = {
         "west": lon_min, "south": lat_min,
         "east": lon_max, "north": lat_max}
