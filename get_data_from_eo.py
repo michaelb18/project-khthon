@@ -139,3 +139,12 @@ def get_image(center_lat, center_lon, height, width, days = 30, time = None):
 
     
     return img
+
+def turn_into_image(image2):
+    img = np.array(image2.sel(band=[3, 2, 1]))
+    img = np.moveaxis(img, 0, -1)
+    min_val, max_val = np.percentile(img, (2, 98)) # Optional: Use percentiles
+    scaled_band = np.clip(img, min_val, max_val)
+    rgb_image = (scaled_band - min_val) / (max_val - min_val)
+    
+    return rgb_image
