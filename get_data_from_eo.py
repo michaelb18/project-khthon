@@ -72,7 +72,7 @@ def get_image(center_lat, center_lon, height, width, days = 30, time = None):
         "SENTINEL2_L2A", #collection chosen
         spatial_extent=spatial_extent,
         temporal_extent=temporal_extent,
-        bands=['B01', 'B02', 'B03', 'B04', 'B05', 'B06', 'B07', 'B08', 'B8A', 'B09', 'SCL', 'B11', 'B12'],
+        bands=['B01', 'B02', 'B03', 'B04', 'B05', 'B06', 'B07', 'B08', 'B8A', 'B09', 'B11', 'B12'],
         max_cloud_cover=50
     )
 

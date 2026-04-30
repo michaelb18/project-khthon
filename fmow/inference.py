@@ -7,6 +7,11 @@ sys.path.append('/home/michael/project_khthon')
 from get_data_from_eo import *
 import torchvision
 import numpy as np
+import geopandas as gpd
+import rioxarray
+from shapely.geometry import box
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
 
 def get_rgb_image(image):
     img = image.sel(band=[3, 2, 1]) * 0.0001
@@ -102,13 +107,6 @@ def inference_rcnn(model, image, iou_thresh = 0.5, confidence_threshold = 0.95, 
 
     # 3. Add boxes using patches
     # We'll just show the first 20 to keep the plot readable
-    from copy import deepcopy
-    rgb_image = deepcopy(get_rgb_image(image))
-    image_w_text = deepcopy(rgb_image)
-    inference_image = get_bands(image)
-    min_val, max_val = np.percentile(image_w_text, (2, 98)) # Optional: Use percentiles
-    scaled_band = np.clip(image_w_text, min_val, max_val)
-    image_w_text = (scaled_band - min_val) / (max_val - min_val)
     boxes = []
     classes = []
     scores = []
@@ -119,7 +117,8 @@ def inference_rcnn(model, image, iou_thresh = 0.5, confidence_threshold = 0.95, 
         x2 = x + w
         y2 = y + h
         #img = np.stack([rgb_image[y1:y2, x1:x2, 0], rgb_image[y1:y2, x1:x2, 1], rgb_image[y1:y2, x1:x2, 2]], axis=0)
-        img = torch.from_numpy(inference_image)
+        img = np.stack([image[i, ...] for i in range(image.shape[0])])
+        img = torch.from_numpy(img[:, y1:y2, x1:x2])
         t = torch.unsqueeze(transform(img).to("cuda"), dim = 0)
         softmaxes = model.predict(t).cpu().numpy()[0, ...]
         result = categories[np.argmax(softmaxes)]
@@ -179,7 +178,7 @@ def get_model(num_classes = 62):
     #model = models.resnet152(weights = models.ResNet152_Weights.IMAGENET1K_V2)
     #model.fc = nn.Linear(model.fc.in_features, num_classes)
     model = ResNetClassifier(num_classes)
-    model.load_state_dict(torch.load('/home/michael/project_khthon/fmow/twelve_channel/best_model.pth'))
+    model.load_state_dict(torch.load('/home/michael/project_khthon/fmow/full/best_model.pth'))
     model.to('cuda')
     model.eval()
     return model
@@ -229,3 +228,74 @@ def get_categories():
         )
 
     return train_loader.dataset.categories
+
+def detections_to_gpd(nms_boxes, nms_scores, nms_classes, image):
+    geometries = []
+    transform = image.rio.transform()
+    for bbox in nms_boxes:
+        x_min, y_min, x_max, y_max = bbox
+        
+        # Transform the corner coordinates
+        left, top = transform * (x_min, y_min)
+        right, bottom = transform * (x_max, y_max)
+        
+        # Create a Shapely box (Polygon)
+        geometries.append(box(left, bottom, right, top))
+    
+    # 3. Assemble the Data
+    # We wrap your arrays into a dictionary to build the GeoDataFrame
+    data = {
+        'class': nms_classes,
+        'score': nms_scores
+    }
+    
+    gdf = gpd.GeoDataFrame(data, geometry=geometries, crs=image.rio.crs)
+
+    return gdf
+
+def plot_detections(rds, nms_boxes, nms_scores, nms_classes, save_path=None):
+    """
+    Plots nms_boxes, scores, and classes directly onto a rioxarray object.
+    
+    Parameters:
+    - rds: The rioxarray.DataArray object.
+    - nms_boxes: np.array of shape (N, 4) in [x1, y1, x2, y2] format.
+    - nms_scores: list or np.array of floats.
+    - nms_classes: list or np.array of strings.
+    - save_path: Optional string path to save the verification image.
+    """
+    # 1. Prepare image data (Extract RGB and transpose to HWC)
+    # We use .values to get the numpy array from xarray
+    img = turn_into_image(rds)
+        
+    fig, ax = plt.subplots(figsize=(15, 15))
+    ax.imshow(img)
+    
+    # 3. Add detections
+    for bbox, score, label in zip(nms_boxes, nms_scores, nms_classes):
+        x1, y1, x2, y2 = bbox
+        width, height = x2 - x1, y2 - y1
+        
+        # Draw the bounding box
+        rect = patches.Rectangle(
+            (x1, y1), width, height, 
+            linewidth=2, edgecolor='#00FF00', facecolor='none'
+        )
+        ax.add_patch(rect)
+        
+        # Create a text label with score
+        label_text = f"{label}: {score:.2f}"
+        ax.text(
+            x1, y1 - 2, label_text, 
+            color='white', fontweight='bold', fontsize=9,
+            bbox=dict(facecolor='#00FF00', alpha=0.5, edgecolor='none', pad=1)
+        )
+    
+    plt.axis('off')
+    plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(save_path, bbox_inches='tight', dpi=300)
+        print(f"Verification image saved to {save_path}")
+        
+    plt.show()
