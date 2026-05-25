@@ -9,6 +9,7 @@ fmow/full/**
 fmow/twelve_channel/**
 fmow/twelve_channel_no_uncertainty/**
 fmow/twelve_channel_no_uncertainty_no_weight/**
+non_fmow/**
 # Ignore all CSV files anywhere in the repository
 **/*.csv
 

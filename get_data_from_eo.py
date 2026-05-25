@@ -11,6 +11,7 @@ connection = openeo.connect("openeofed.dataspace.copernicus.eu")
 connection.authenticate_oidc()
 
 from pyproj import Transformer
+import pyproj
 from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
 
@@ -30,29 +31,38 @@ def meters2latlon(center_lat, center_lon, height, width):
 
 def ll2px(rds, lat_list, lon_list):
     """
-    rds: The DataArray returned by rioxarray
-    lat_lon_bbox: A tuple of (minx, miny, maxx, maxy) in Lat/Long
+    Converts lists of latitudes and longitudes to pixel row and column indices.
+    
+    Parameters:
+        rds (xarray.DataArray): The rioxarray-opened raster object.
+        lat_list (list): List of latitude floats.
+        lon_list (list): List of longitude floats.
+        
+    Returns:
+        tuple: (rows, cols) as lists of integer pixel indices.
     """
-    """
-    rds: The DataArray from rioxarray
-    lat_list: List or Array of latitudes
-    lon_list: List or Array of longitudes
-    Returns: (pixel_cols, pixel_rows) as two numpy arrays
-    """
-    # 1. Setup the Transformer
-    # From WGS84 (Lat/Lon) to the Image's own CRS
-    img_crs = rds.rio.crs
-    transformer = Transformer.from_crs("EPSG:4326", img_crs, always_xy=True)
+    # Get spatial metadata
+    dst_crs = rds.rio.crs
+    transform = rds.rio.transform()
+    inv_transform = ~transform
 
-    # 2. Convert all Lat/Lon to the Image's Coordinate System (e.g. UTM)
-    target_x, target_y = transformer.transform(lon_list, lat_list)
+    # Set up coordinate transformer
+    transformer = pyproj.Transformer.from_crs("EPSG:4326", dst_crs, always_xy=True)
+    
+    rows = []
+    cols = []
+    
+    # Process coordinate pairs
+    for lat, lon in zip(lat_list, lon_list):
+        x, y = transformer.transform(lon, lat)
+        col, row = inv_transform * (x, y)
+        
+        rows.append(int(row))
+        cols.append(int(col))
+        
+    return rows, cols
 
-    rows, cols = rds.rio.index(target_x, target_y)
-
-    # Convert to standard numpy integers for plotting
-    return np.array(cols), np.array(rows)
-
-def get_image(center_lat, center_lon, height, width, days = 30, time = None):
+def get_image(center_lat, center_lon, height, width, save_path = 'champs3.tiff', days = 30, time = None):
     
     if time is None:
         time = datetime.now().date()
@@ -123,7 +133,7 @@ def get_image(center_lat, center_lon, height, width, days = 30, time = None):
 
 
     with tempfile.TemporaryDirectory() as download_dir:
-        download_dir = os.path.join(download_dir, 'champs3.tiff')
+        download_dir = os.path.join(download_dir, save_path)
         image = job.download_results(download_dir)
         import rioxarray
 
@@ -140,11 +150,78 @@ def get_image(center_lat, center_lon, height, width, days = 30, time = None):
     
     return img
 
+def label_sentinel2_with_lucas(
+    img,
+    class_columns: list[str] | None = None,
+) -> dict[str, np.ndarray]:
+    from read_lucas import read_lucas
+    from shapely.geometry import box
+    from shapely.ops import transform as shapely_transform
+    from rasterio.features import rasterize
+    from pyproj import Transformer
+
+    if class_columns is None:
+        class_columns = ["LC1", "LC1_SPEC", "LC2"]
+
+    lucas_gdf = read_lucas()
+
+    img_crs = img.rio.crs
+    minx, miny, maxx, maxy = img.rio.bounds()
+    to_wgs84 = Transformer.from_crs(img_crs, "EPSG:4326", always_xy=True)
+    lon_min, lat_min = to_wgs84.transform(minx, miny)
+    lon_max, lat_max = to_wgs84.transform(maxx, maxy)
+    bbox = box(lon_min, lat_min, lon_max, lat_max)
+
+    subset = lucas_gdf[lucas_gdf.geometry.intersects(bbox)].copy()
+
+    nrows, ncols = img.shape[1], img.shape[2]
+    transform = img.rio.transform()
+    to_img_crs = Transformer.from_crs("EPSG:4326", img_crs, always_xy=True)
+
+    masks = {}
+    for col in class_columns:
+        if col not in subset.columns:
+            continue
+
+        valid = subset[col].notna()
+        if valid.sum() == 0:
+            masks[col] = np.full((nrows, ncols), None, dtype=object)
+            continue
+
+        unique_vals = subset.loc[valid, col].unique()
+        val_to_int = {v: i + 1 for i, v in enumerate(unique_vals)}
+
+        shapes = []
+        for _, row in subset[valid].iterrows():
+            geom_img = shapely_transform(
+                lambda x, y: to_img_crs.transform(x, y), row.geometry
+            )
+            shapes.append((geom_img, val_to_int[row[col]]))
+
+        int_mask = rasterize(
+            shapes,
+            out_shape=(nrows, ncols),
+            transform=transform,
+            fill=0,
+            dtype=np.int32,
+        )
+
+        str_mask = np.full((nrows, ncols), None, dtype=object)
+        for val, code in val_to_int.items():
+            str_mask[int_mask == code] = val
+
+        masks[col] = str_mask
+
+    return masks
+
+
 def turn_into_image(image2):
-    img = np.array(image2.sel(band=[3, 2, 1]))
-    img = np.moveaxis(img, 0, -1)
-    min_val, max_val = np.percentile(img, (2, 98)) # Optional: Use percentiles
-    scaled_band = np.clip(img, min_val, max_val)
-    rgb_image = (scaled_band - min_val) / (max_val - min_val)
-    
+    r = np.array(image2.sel(band=4)).squeeze()   # B04 — Red
+    g = np.array(image2.sel(band=3)).squeeze()   # B03 — Green
+    b = np.array(image2.sel(band=2)).squeeze()   # B02 — Blue
+    img = np.stack([r, g, b], axis=-1).astype(np.float32)
+
+    min_val, max_val = np.percentile(img, (2, 98))
+    rgb_image = np.clip((img - min_val) / (max_val - min_val), 0, 1)
+
     return rgb_image
