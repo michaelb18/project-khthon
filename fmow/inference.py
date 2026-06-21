@@ -12,6 +12,7 @@ import rioxarray
 from shapely.geometry import box
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
+import pickle
 
 def get_rgb_image(image):
     img = image.sel(band=[3, 2, 1]) * 0.0001
@@ -53,35 +54,49 @@ def get_top_k_categories(softmax_scores, categories, k):
     return top_k_categories, top_k_scores
 
 def get_anchors():
-    config = load_config('/home/michael/project_khthon/fmow/config.yaml')
+    if os.path.exists('/home/michael/project_khthon/fmow/'):
+        config = load_config('/home/michael/project_khthon/fmow/config.yaml')
 
-    # Extract parameters with defaults
-    args = type('Args', (), {
-        'root_dir': config.get('root_dir', '/home/michael/project_khthon/fmow'),
-        'output_dir': config.get('output_dir', './outputs'),
-        'batch_size': config.get('batch_size', 32),
-        'epochs': config.get('epochs', 20),
-        'lr': config.get('lr', 1e-4),
-        'num_workers': config.get('num_workers', 4),
-        'model_name': config.get('model_name', 'Sentinel2_SwinT_SI_MS'),
-        'infill_nulls': config.get('infill_nulls', True),
-        'image_size': config.get('image_size', 224),
-        'categories': config.get('categories', None),
-        'max_samples_per_category': config.get('max_samples_per_category', None)
-    })()
-    train_loader = create_dataloader(
-            root_dir=args.root_dir,
-            split='train',
-            batch_size=args.batch_size,
-            shuffle=True,
-            num_workers=args.num_workers,
-            infill_nulls=args.infill_nulls,
-            image_size=args.image_size,
-            categories=args.categories,
-            max_samples_per_category=50
-        )
+        # Extract parameters with defaults
+        args = type('Args', (), {
+            'root_dir': config.get('root_dir', '/home/michael/project_khthon/fmow'),
+            'output_dir': config.get('output_dir', './outputs'),
+            'batch_size': config.get('batch_size', 32),
+            'epochs': config.get('epochs', 20),
+            'lr': config.get('lr', 1e-4),
+            'num_workers': config.get('num_workers', 4),
+            'model_name': config.get('model_name', 'Sentinel2_SwinT_SI_MS'),
+            'infill_nulls': config.get('infill_nulls', True),
+            'image_size': config.get('image_size', 224),
+            'categories': config.get('categories', None),
+            'max_samples_per_category': config.get('max_samples_per_category', None)
+        })()
+        train_loader = create_dataloader(
+                root_dir=args.root_dir,
+                split='train',
+                batch_size=args.batch_size,
+                shuffle=True,
+                num_workers=args.num_workers,
+                infill_nulls=args.infill_nulls,
+                image_size=args.image_size,
+                categories=args.categories,
+                max_samples_per_category=50
+            )
 
-    return compute_anchors(train_loader, n_anchors = 1)
+        anchors = compute_anchors(train_loader, n_anchors = 1)
+
+        with open('./anchors.pkl', 'wb') as f:
+            pickle.dump(anchors, f)
+
+        return anchors
+    else:
+        #hope that this cache directory exists for now
+        if not os.path.exits('./anchors.pkl'):
+            raise ValueError('Contact Michael for required files for anchors')
+        with open('./anchors.pkl', 'rb') as f:
+            anchors = pickle.load(f)
+
+        return anchors
 
 def iou(w1, h1, w2, h2):
     inter_w = min(w1, w2)
@@ -299,3 +314,6 @@ def plot_detections(rds, nms_boxes, nms_scores, nms_classes, save_path=None):
         print(f"Verification image saved to {save_path}")
         
     plt.show()
+
+if __name__ == '__main__':
+    get_anchors()
