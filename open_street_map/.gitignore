@@ -1,0 +1,8 @@
+.ipynb_checkpoints/**
+cache/**
+tiff_cache/**
+collected_data/**
+collected_data_5km/**
+__pycache__/**
+*.xlsx
+evaluation_output/**
