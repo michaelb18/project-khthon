@@ -228,7 +228,7 @@ if __name__ == '__main__':
         return lat, lon
 
     locations = []
-    for c in graves_df['Coordinates'][:20]:
+    for c in graves_df['Coordinates'][:int(0.8 * len(graves_df))]:
         lat, lon = dms_to_dd(c)
         if lat is not None:
             locations.append((lat, lon))
@@ -236,7 +236,7 @@ if __name__ == '__main__':
     print(f"Loaded {len(locations)} locations from AI Grave Dataset")
 
     train_df, test_df, pipe = pipeline_from_locations(
-        locations, height=5000, width=5000
+        locations, height=5000, width=5000, samples_per_class = 1000
     )
 
     model_path = out / 'model.joblib'
